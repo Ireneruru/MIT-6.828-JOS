@@ -1,0 +1,150 @@
+diff --git a/inc/color.h b/inc/color.h
+new file mode 100644
+index 0000000..ed09ec1
+--- /dev/null
++++ b/inc/color.h
+@@ -0,0 +1,3 @@
++int FG_COLOR;
++int BG_COLOR;
++int COLOR;
+diff --git a/kern/console.c b/kern/console.c
+index 7d312a7..aba428e 100644
+--- a/kern/console.c
++++ b/kern/console.c
+@@ -5,6 +5,7 @@
+ #include <inc/kbdreg.h>
+ #include <inc/string.h>
+ #include <inc/assert.h>
++#include <inc/color.h>
+ 
+ #include <kern/console.h>
+ 
+@@ -164,8 +165,7 @@ cga_putc(int c)
+ {
+ 	// if no attribute given, then use black on white
+ 	if (!(c & ~0xFF))
+-		c |= 0x0700;
+-
++	   	c |= COLOR;
+ 	switch (c & 0xff) {
+ 	case '\b':
+ 		if (crt_pos > 0) {
+diff --git a/kern/kdebug.c b/kern/kdebug.c
+index 9547143..a573a6c 100644
+--- a/kern/kdebug.c
++++ b/kern/kdebug.c
+@@ -179,6 +179,9 @@ debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info)
+ 	//	Look at the STABS documentation and <inc/stab.h> to find
+ 	//	which one.
+ 	// Your code here.
++		stab_binsearch(stabs, &lline, &rline, N_SLINE, addr);
++		if (lline <= rline) info->eip_line = lline - lfun;
++		else return -1;
+ 
+ 
+ 	// Search backwards from the line number for the relevant filename
+diff --git a/kern/monitor.c b/kern/monitor.c
+index e137e92..db7917c 100644
+--- a/kern/monitor.c
++++ b/kern/monitor.c
+@@ -57,7 +57,29 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf)
+ int
+ mon_backtrace(int argc, char **argv, struct Trapframe *tf)
+ {
+-	// Your code here.
++	int *ebp, eip, *old_ebp;
++	int ary[5]={};
++
++	cprintf("Stack backtrace:\n");
++	
++	ebp=(int *)read_ebp();
++	while((int)ebp!=0)
++	{
++		old_ebp=(int *)*(ebp);
++		eip=*(ebp+1);
++		for(int i=0;i<5;++i)
++		{
++			int j=i+2;
++			ary[i]=*(ebp+j);
++		}
++		struct Eipdebuginfo eip_info;
++		debuginfo_eip((uintptr_t)eip, &eip_info);
++		cprintf("\033[16ebp %08x eip %08x args %08x %08x %08x %08x %08x\n",ebp,eip,ary[0],ary[1],ary[2],ary[3],ary[4]);
++		cprintf("\033[28	%s:%d:", eip_info.eip_file, eip_info.eip_line);
++		cprintf("\033[3a %.*s+%d\n", eip_info.eip_fn_namelen, eip_info.eip_fn_name, eip - eip_info.eip_fn_addr);
++		ebp=old_ebp;
++	}
++	
+ 	return 0;
+ }
+ 
+diff --git a/lib/printfmt.c b/lib/printfmt.c
+index 28e01c9..50b0aa9 100644
+--- a/lib/printfmt.c
++++ b/lib/printfmt.c
+@@ -7,6 +7,7 @@
+ #include <inc/string.h>
+ #include <inc/stdarg.h>
+ #include <inc/error.h>
++#include <inc/color.h>
+ 
+ /*
+  * Space or zero padding and a field width are supported for the numeric
+@@ -92,6 +93,33 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
+ 		while ((ch = *(unsigned char *) fmt++) != '%') {
+ 			if (ch == '\0')
+ 				return;
++			else if(ch == '\033'){
++				if((ch = *(unsigned char *) fmt++) != '[') {
++				    putch(ch, putdat);
++				    continue;
++				}
++				BG_COLOR = *(unsigned char *) fmt++;
++				FG_COLOR = *(unsigned char *) fmt++;
++
++				if(BG_COLOR >= '0' && BG_COLOR <= '9')
++				    BG_COLOR -= '0';
++				else if(BG_COLOR >= 'a' && BG_COLOR <= 'f')
++				    BG_COLOR = BG_COLOR - 'a' + 10;
++				else if(BG_COLOR >= 'A' && BG_COLOR <= 'F')
++				    BG_COLOR = BG_COLOR - 'A' + 10;
++				else BG_COLOR = 0;
++
++				if(FG_COLOR >= '0' && FG_COLOR <= '9')
++				    FG_COLOR -= '0';
++				else if(FG_COLOR >= 'a' && FG_COLOR <= 'f')
++				    FG_COLOR = FG_COLOR - 'a' + 10;
++				else if(FG_COLOR >= 'A' && FG_COLOR <= 'F')
++				    FG_COLOR = FG_COLOR - 'A' + 10;
++				else BG_COLOR = 7;
++
++				COLOR = (BG_COLOR << 12) | (FG_COLOR << 8);
++				continue;
++			}	
+ 			putch(ch, putdat);
+ 		}
+ 
+@@ -205,11 +233,9 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
+ 
+ 		// (unsigned) octal
+ 		case 'o':
+-			// Replace this with your code.
+-			putch('X', putdat);
+-			putch('X', putdat);
+-			putch('X', putdat);
+-			break;
++			num = getuint(&ap,lflag);
++			base = 8;
++			goto number;
+ 
+ 		// pointer
+ 		case 'p':
+@@ -231,7 +257,7 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
+ 		// escaped '%' character
+ 		case '%':
+ 			putch(ch, putdat);
+-			break;
++			break;			
+ 
+ 		// unrecognized escape sequence - just print it literally
+ 		default:
